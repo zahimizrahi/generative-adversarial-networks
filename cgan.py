@@ -1,19 +1,22 @@
 import os
+
 import numpy as np
-
 import tensorflow as tf
-from tensorflow.keras.layers import Input, Dense, Dropout
 from tensorflow.keras import Model
-
+from tensorflow.keras.layers import Input, Dense, Dropout, Flatten, Embedding, multiply
 from tensorflow.keras.optimizers import Adam, SGD
 
 
-class Generator:
-    def __init__(self, batch_size):
+class Generator():
+    def __init__(self, batch_size, num_classes):
         self.batch_size = batch_size
+        self.num_classes = num_classes
 
     def build(self, input_shape, input_size, layer_size, dropout=1):
-        input = Input(shape=input_shape, batch_size=self.batch_size)
+        noise = Input(shape=input_shape, batch_size=self.batch_size)
+        label = Input(shape=(1, ), batch_size=self.batch_size, dtype='int32')
+        label_embedding = Flatten() (Embedding(self.num_classes, 1) (label))
+        input = multiply([noise, label_embedding])
         x = Dense(layer_size, activation='relu')(input)
         if dropout < 1:
             x = Dropout(dropout)(x)
@@ -22,28 +25,33 @@ class Generator:
             x = Dropout(dropout)(x)
         x = Dense(layer_size * 4, activation='relu')(x)
         x = Dense(input_size)(x)
-        return Model(inputs=input, outputs=x)
+        return Model(inputs=[noise, label],  outputs=x)
 
 
-class Discriminator:
-    def __init__(self, batch_size):
+class Discriminator():
+    def __init__(self, batch_size, num_classes):
         self.batch_size = batch_size
+        self.num_classes = num_classes
 
-    def build(self, input_shape, layer_size, dropout=.2):
-        input = Input(shape=input_shape, batch_size=self.batch_size)
+    def build(self, input_shape, layer_size, dropout=.1):
+        noise= Input(shape=input_shape, batch_size=self.batch_size)
+        label = Input(shape=(1,), batch_size=self.batch_size, dtype='int32')
+        label_embedding = Flatten()(Embedding(self.num_classes, 1)(label))
+        noise_flat = Flatten()(noise)
+        input = multiply([noise_flat, label_embedding])
         x = Dense(layer_size * 4, activation='relu')(input)
-        # if dropout < 1:
-        #  x = Dropout(dropout)(x)
+        if dropout < 1:
+            x = Dropout(dropout)(x)
         x = Dense(layer_size * 2, activation='relu')(x)
-        # if dropout < 1:
-        #  x = Dropout(dropout)(x)
+        if dropout < 1:
+            x = Dropout(dropout)(x)
         x = Dense(layer_size, activation='relu')(x)
         x = Dense(1, activation='sigmoid')(x)
-        return Model(inputs=input, outputs=x)
+        return Model(inputs=[noise, label], outputs=x)
 
 
-class GAN:
-    def __init__(self, batch_size=128, noise_size=32, input_size=128,
+class CGAN():
+    def __init__(self, batch_size=128, noise_size=32, input_size=128, num_classes=2, classes=None,
                  layer_size=128, optimizer=None, lr=1e-4, generator_dropout=1,
                  discriminator_dropout=.2, loss='binary_crossentropy',
                  metrics=['accuracy'], verbose=True):
@@ -57,17 +65,19 @@ class GAN:
         self.loss = loss
         self.metrics = metrics
         self.verbose = verbose
+        self.num_classes = num_classes
+        self.classes = classes
 
         if optimizer == None or optimizer == 'Adam':
             self.optimizer = Adam(lr=self.lr)
         else:
             self.optimizer = SGD(lr=self.lr)
 
-        self.generator = Generator(self.batch_size) \
+        self.generator = Generator(self.batch_size, self.num_classes) \
             .build(input_shape=(self.noise_size,), layer_size=self.layer_size,
                    input_size=self.input_size, dropout=self.generator_dropout)
 
-        self.discriminator = Discriminator(self.batch_size) \
+        self.discriminator = Discriminator(self.batch_size, self.num_classes) \
             .build(input_shape=(self.input_size,), layer_size=self.layer_size,
                    dropout=self.discriminator_dropout)
 
@@ -76,22 +86,24 @@ class GAN:
                                    metrics=self.metrics)
 
         # The Generator takes some noise as its input and generate new data
-        z = Input(shape=(self.noise_size, 1))
-        record = self.generator(z)
+        z = Input(shape=(self.noise_size, ), batch_size=self.batch_size)
+        label = Input(shape=(1, ), batch_size=self.batch_size)
+        record = self.generator([z, label])
 
         # We will train only the generator for now ()
         self.discriminator.trainable = False
 
         # the discriminator takes the generated data as input and decided validity
-        valid_rate = self.discriminator(record)
+        valid_rate = self.discriminator([record, label])
 
         # The combined model  (stacked generator and discriminator)
         # We will train the generator to fool the discriminator
-        self.model = Model(z, valid_rate)
+        self.model = Model([z, label], valid_rate)
         self.model.compile(loss=self.loss, optimizer=self.optimizer)
 
-    def train(self, data, path_prefix='', epochs=3000, step_interval=100):
+    def train(self, data, label_size, path_prefix='', epochs=3000, step_interval=100):
         self.path_prefix = path_prefix
+        self.label_size = label_size
         self.epochs = epochs
         self.step_interval = step_interval
 
@@ -105,15 +117,16 @@ class GAN:
 
             # Setting batch of real data and noise
             batch_data = get_batch(data, self.batch_size)
+            label = batch_data[:, self.label_size]
             noise = tf.random.normal((self.batch_size, self.noise_size))
 
             # generate a batch of new data
-            gen_data = self.generator.predict(noise)
+            gen_records = self.generator.predict([noise, label])
 
             # train the discriminator
-            loss_real_discriminator = self.discriminator.train_on_batch(batch_data,
+            loss_real_discriminator = self.discriminator.train_on_batch([batch_data, label],
                                                                         valids)
-            loss_fake_discriminator = self.discriminator.train_on_batch(gen_data,
+            loss_fake_discriminator = self.discriminator.train_on_batch([gen_records, label],
                                                                         non_valids)
             total_loss_discriminator = 0.5 * np.add(loss_real_discriminator,
                                                     loss_fake_discriminator)
@@ -121,7 +134,7 @@ class GAN:
             # train the generator - to have the discriminator label samples from the
             # training of the discriminator as valid
             noise = tf.random.normal((self.batch_size, self.noise_size))
-            total_loss_generator = self.model.train_on_batch(noise, valids)
+            total_loss_generator = self.model.train_on_batch([noise,label], valids)
 
             if self.verbose:
                 print("%d [D loss: %f, acc.: %.2f%%] [G loss: %f]" %
@@ -131,17 +144,19 @@ class GAN:
             # if we came to step interval we need to save the generated data
             if epoch % self.step_interval == 0:
                 model_checkpoint_path_d = os.path.join('weights/', self.path_prefix,
-                                                       'discriminator_model_weights_step_{}.h5'
+                                                       'cgan_discriminator_model_weights_step_{}'
                                                        .format(epoch))
                 self.discriminator.save_weights(model_checkpoint_path_d)
                 model_checkpoint_path_g = os.path.join('./weights/', self.path_prefix,
-                                                       'generator_model_weights_step_{}.h5'
+                                                       'cgan_generator_model_weights_step_{}'
                                                        .format(epoch))
                 self.generator.save_weights(model_checkpoint_path_g)
 
                 # generating some data
                 z = tf.random.normal((432, self.noise_size))
-                gen_data = self.generator(z)
+                label_z = tf.random.uniform((432,), minval=min(self.classes), maxval=max(self.classes) + 1,
+                                            dtype=tf.dtypes.int32)
+                gen_data = self.generator([z, label_z])
                 if self.verbose:
                     print('generated_data')
 
@@ -157,7 +172,6 @@ class GAN:
         self.generator = Generator(self.batch_size)
         self.generator = self.generator.load_weights(path)
         return self.generator
-
 
 def get_batch(train, batch_size, seed=0):
     start_index = (batch_size * seed) % len(train)

@@ -14,12 +14,12 @@ def load_data_from_arff(path):
     return df
 
 
-def preprocess_data(data_df, normalized=True, how='standard'):
+def preprocess_data(data_df, normalized=True, how='standard', class_col='class'):
   """
   transform and normalize the data according to the how argument. gets a data_df and returns a transformed pandas dataframe.
   """
     le = LabelEncoder()
-    data_columns = data_df.columns[data_df.columns != 'class'].tolist()
+    data_columns = data_df.columns[data_df.columns != class_col].tolist()
     for col in data_columns:
         if data_df[col].dtype != np.float64:
             le.fit(data_df[col])
