@@ -95,7 +95,7 @@ class GAN:
         self.step_interval = step_interval
 
         data_columns = data.columns
-
+        history = {'d_loss': [], 'g_loss': []}
         # Adversarial ground truths
         valids = np.ones((self.batch_size, 1))
         non_valids = np.zeros((self.batch_size, 1))
@@ -122,6 +122,9 @@ class GAN:
             noise = tf.random.normal((self.batch_size, self.noise_size))
             total_loss_generator = self.model.train_on_batch(noise, valids)
 
+            history['d_loss'].append(total_loss_discriminator[0])
+            history['g_loss'].append(total_loss_generator)
+
             if self.verbose:
                 print("%d [D loss: %f, acc.: %.2f%%] [G loss: %f]" %
                       (epoch, total_loss_discriminator[0],
@@ -143,6 +146,7 @@ class GAN:
                 gen_data = self.generator(z)
                 if self.verbose:
                     print('generated_data')
+        return history
 
     def save(self, path, name):
         if os.path.isdir(path) == False:
