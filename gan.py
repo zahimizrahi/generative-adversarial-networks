@@ -148,18 +148,20 @@ class GAN:
                     print('generated_data')
         return history
 
-    def save(self, path, name):
-        if os.path.isdir(path) == False:
+    def save(self, path):
+        if not os.path.isdir(path):
             raise Exception('Please provide correct path - Path must be a directory!')
-        model_path = os.path.join(path, name)
-        self.generator.save_weights(model_path)  # Load the generator
+        self.generator.save_weights(os.path.join(path, 'generator_weights.h5'))  # Load the generator
+        self.discrimnator.save_weights(os.path.join(path, 'disriminator_weights.h5'))
 
     def load(self, path):
-        if os.path.isdir(path) == False:
+        if not os.path.isdir(path):
             raise Exception('Please provide correct path - Path must be a directory!')
         self.generator = Generator(self.batch_size)
-        self.generator = self.generator.load_weights(path)
-        return self.generator
+        self.generator = self.generator.load_weights(os.path.join(path, 'generator_weights.h5'))
+        self.discriminator = Discriminator(self.batch_size)
+        self.discriminator = self.discriminator.load_weights(os.path.join(path, 'discriminator_weights.h5'))
+        return self.generator, self.discriminator
 
 
 def get_batch(train, batch_size, seed=0):
