@@ -5,6 +5,9 @@ import tensorflow as tf
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Input, Dense, Dropout
 from tensorflow.keras.optimizers import Adam, SGD
+import pandas as pd
+
+from utils import load_data_from_arff, preprocess_data, inverse_transform
 
 
 class Generator():
@@ -148,18 +151,33 @@ class GAN:
                     print('generated_data')
         return history
 
-    def save(self, path, name):
-        if os.path.isdir(path) == False:
+    def save(self, path):
+        if not os.path.isdir(path):
             raise Exception('Please provide correct path - Path must be a directory!')
-        model_path = os.path.join(path, name)
-        self.generator.save_weights(model_path)  # Load the generator
+        self.generator.save_weights(os.path.join(path, 'generator_weights.h5'))  # Load the generator
+        self.discriminator.save_weights(os.path.join(path, 'disriminator_weights.h5'))
 
     def load(self, path):
-        if os.path.isdir(path) == False:
+        if not os.path.isdir(path):
             raise Exception('Please provide correct path - Path must be a directory!')
         self.generator = Generator(self.batch_size)
-        self.generator = self.generator.load_weights(path)
-        return self.generator
+        self.generator = self.generator.load_weights(os.path.join(path, 'generator_weights.h5'))
+        self.discriminator = Discriminator(self.batch_size)
+        self.discriminator = self.discriminator.load_weights(os.path.join(path, 'discriminator_weights.h5'))
+        return self.generator, self.discriminator
+
+    def generate_samples(self, data_path, num_samples=100, noise_size=32, load=True):
+        df = load_data_from_arff(data_path)
+        df1, les, normalizer, transformed_columns = preprocess_data(df, how='standard', class_col='income')
+
+        x_fake = tf.random.normal((num_samples, noise_size))
+        pred = self.generator.predict(x_fake)
+
+        res_df = pd.DataFrame(pred, columns=df1.columns)
+
+        res_df1 = inverse_transform(res_df, les, normalizer, transformed_columns, class_col='income')
+
+        return res_df1
 
 
 def get_batch(train, batch_size, seed=0):
