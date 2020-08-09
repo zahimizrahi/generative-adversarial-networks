@@ -5,6 +5,8 @@ import tensorflow as tf
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Input, Dense, Dropout, Flatten, Embedding, multiply
 from tensorflow.keras.optimizers import Adam, SGD
+import pandas as pd
+from utils import inverse_transform, load_data_from_arff, preprocess_data
 
 
 class Generator():
@@ -166,7 +168,7 @@ class CGAN():
         if not os.path.isdir(path):
             raise Exception('Please provide correct path - Path must be a directory!')
         self.generator.save_weights(os.path.join(path, 'generator_weights.h5')) # Load the generator
-        self.discrimnator.save_weights(os.path.join(path, 'disriminator_weights.h5'))
+        self.discriminator.save_weights(os.path.join(path, 'disriminator_weights.h5'))
 
     def load(self, path):
         if not os.path.isdir(path):
@@ -177,6 +179,19 @@ class CGAN():
         self.discriminator = self.discriminator.load_weights(os.path.join(path, 'discriminator_weights.h5'))
         return self.generator, self.discriminator
 
+    def generate_samples(self, data_path, num_samples=100, noise_size=32, load=True):
+        df = load_data_from_arff(data_path)
+        df1, les, normalizer, transformed_columns = preprocess_data(df, how='standard', class_col='income')
+
+        x_fake = tf.random.normal((num_samples, noise_size))
+        y_fake = np.random.uniform(0, 1, (num_samples, 1))
+        pred = self.generator.predict([x_fake, y_fake])
+
+        res_df = pd.DataFrame(pred, columns=df1.columns)
+
+        res_df1 = inverse_transform(res_df, les, normalizer, transformed_columns, class_col='income')
+
+        return res_df1
 
 def get_batch(train, batch_size, seed=0):
     start_index = (batch_size * seed) % len(train)
