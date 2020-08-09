@@ -1,6 +1,7 @@
-import os
-
 import numpy as np
+import matplotlib.pyplot as plt
+import os
+from sklearn import metrics
 import tensorflow as tf
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Input, Dense, Dropout, Flatten, Embedding, multiply, Concatenate, LeakyReLU, \
@@ -35,8 +36,8 @@ def confidence_loss(y_true, y_pred):
     return bce(y_true, y_pred[:, -1])
 
 
-def train_generator(generator, rf_model, df, epochs=500, conf_size=1, batch_size=128, noise_size=128,
-                    save_path='part2'):
+def train_generator_part2(generator, rf_model, df, epochs=500, conf_size=1, batch_size=128, noise_size=128,
+                          save_path='part2'):
     history = []
     x_df = df.iloc[:, :-1]
     y_hat = rf_model.predict_proba(x_df)
@@ -94,8 +95,8 @@ def evaluate_random_forest(rf_model, x_test, y_test):
                                                                            mean_conf))
 
 
-def evaluate_generator(generator, rf_model, x_test, y_test, generated_size=128, conf_size=1, noise_size=128,
-                       save_path='part2'):
+def evaluate_generator_part2(generator, rf_model, x_test, y_test, generated_size=128, conf_size=1, noise_size=128,
+                             save_path='part2'):
     generator.load_weights(os.path.join(save_path, 'generator_weights.h5'))
 
     # evaluate rf_model
