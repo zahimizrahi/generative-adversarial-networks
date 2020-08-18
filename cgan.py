@@ -99,7 +99,8 @@ class CGAN():
         self.model = Model([z, label], valid_rate)
         self.model.compile(loss=self.loss, optimizer=self.optimizer)
 
-    def train(self, data, label_size, path_prefix='', epochs=3000, step_interval=100, is_Early_stopping=False):
+    def train(self, data, label_size, path_prefix='', epochs=3000, step_interval=100, is_Early_stopping=False,
+              generate_data=True):
         self.path_prefix = path_prefix
         self.label_size = label_size
         self.epochs = epochs
@@ -155,7 +156,14 @@ class CGAN():
                                                            .format(epoch))
                     self.generator.save_weights(model_checkpoint_path_g)
 
+                history['g_loss'].append(total_loss_generator)
+                history['d_loss'].append(total_loss_discriminator[0])
+                # generating some data
+                if generate_data:
                     if iterations_counter > 3000:
+                        z = tf.random.normal((self.batch_size, self.noise_size))
+                        label_z = np.random.randint(self.classes[0], self.classes[1] + 1, (self.batch_size, 1))
+                        gen_data = self.generator.predict([z, label_z])
                         is_catch = True
                         is_fool = True
                         records = self.discriminator.predict_on_batch([gen_data, label_z])
@@ -163,14 +171,11 @@ class CGAN():
                             if record > 0.5 and is_fool:
                                 is_fool = False
                                 fool_sample = gen_data[i]
-                                fools_discriminator_samples.append([fool_sample, record])
+                                fools_discriminator_samples.append([np.append(fool_sample, [label_z[i]]), record])
                             elif len(catch_discriminator_samples) < 100 and is_catch:
                                 is_catch = False
                                 catch_sample = gen_data[i]
-                                catch_discriminator_samples.append([catch_sample, record])
-
-                history['g_loss'].append(total_loss_generator)
-                history['d_loss'].append(total_loss_discriminator[0])
+                                catch_discriminator_samples.append([np.append(catch_sample, [label_z[i]]), record])
 
                 if self.verbose:
                     print("epoch: %d iterations: %d [D loss: %f, acc.: %.2f%%] [G loss: %f]" %
@@ -190,7 +195,7 @@ class CGAN():
                     elif Early_stopping_counter > 100:
                         print('Early Stopping')
                         return history
-        return history
+        return history, catch_discriminator_samples, fools_discriminator_samples
 
     def get_discriminator(self):
         return self.discriminator
