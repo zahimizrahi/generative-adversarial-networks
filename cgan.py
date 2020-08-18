@@ -1,12 +1,9 @@
 import os
-
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Input, Dense, Dropout, Flatten, Embedding, multiply
 from tensorflow.keras.optimizers import Adam, SGD
-import pandas as pd
-from utils import inverse_transform, load_data_from_arff, preprocess_data
 
 
 class Generator():
@@ -16,8 +13,8 @@ class Generator():
 
     def build(self, input_shape, input_size, layer_size, dropout=1):
         noise = Input(shape=input_shape, batch_size=self.batch_size)
-        label = Input(shape=(1, ), batch_size=self.batch_size, dtype='int32')
-        label_embedding = Flatten() (Embedding(self.num_classes, 1) (label))
+        label = Input(shape=(1,), batch_size=self.batch_size, dtype='int32')
+        label_embedding = Flatten()(Embedding(self.num_classes, 1)(label))
         input = multiply([noise, label_embedding])
         x = Dense(layer_size, activation='relu')(input)
         if dropout < 1:
@@ -26,8 +23,8 @@ class Generator():
         if dropout < 1:
             x = Dropout(dropout)(x)
         x = Dense(layer_size * 4, activation='relu')(x)
-        x = Dense(input_size)(x)
-        return Model(inputs=[noise, label],  outputs=x)
+        x = Dense(input_size, activation='sigmoid')(x)
+        return Model(inputs=[noise, label], outputs=x)
 
 
 class Discriminator():
@@ -36,7 +33,7 @@ class Discriminator():
         self.num_classes = num_classes
 
     def build(self, input_shape, layer_size, dropout=.1):
-        noise= Input(shape=input_shape, batch_size=self.batch_size)
+        noise = Input(shape=input_shape, batch_size=self.batch_size)
         label = Input(shape=(1,), batch_size=self.batch_size, dtype='int32')
         label_embedding = Flatten()(Embedding(self.num_classes, 1)(label))
         noise_flat = Flatten()(noise)
@@ -53,13 +50,13 @@ class Discriminator():
 
 
 class CGAN():
-    def __init__(self, batch_size=128, noise_size=32, input_size=128, num_classes=2, classes=None,
+    def __init__(self, batch_size=128, noise_size=32, input_size=128, num_classes=2, classes=[0, 1],
                  layer_size=128, optimizer=None, lr=1e-4, generator_dropout=1,
                  discriminator_dropout=.2, loss='binary_crossentropy',
                  metrics=['accuracy'], verbose=True):
         self.batch_size = batch_size
         self.noise_size = noise_size
-        self.input_size = input_size
+        self.input_size = input_size - 1
         self.layer_size = layer_size
         self.generator_dropout = generator_dropout
         self.discriminator_dropout = discriminator_dropout
@@ -74,7 +71,6 @@ class CGAN():
             self.optimizer = Adam(lr=self.lr)
         else:
             self.optimizer = SGD(lr=self.lr)
-
         self.generator = Generator(self.batch_size, self.num_classes) \
             .build(input_shape=(self.noise_size,), layer_size=self.layer_size,
                    input_size=self.input_size, dropout=self.generator_dropout)
@@ -88,8 +84,8 @@ class CGAN():
                                    metrics=self.metrics)
 
         # The Generator takes some noise as its input and generate new data
-        z = Input(shape=(self.noise_size, ), batch_size=self.batch_size)
-        label = Input(shape=(1, ), batch_size=self.batch_size)
+        z = Input(shape=(self.noise_size,), batch_size=self.batch_size)
+        label = Input(shape=(1,), batch_size=self.batch_size)
         record = self.generator([z, label])
 
         # We will train only the generator for now ()
@@ -103,95 +99,137 @@ class CGAN():
         self.model = Model([z, label], valid_rate)
         self.model.compile(loss=self.loss, optimizer=self.optimizer)
 
-    def train(self, data, label_size, path_prefix='', epochs=3000, step_interval=100):
+    def train(self, data, label_size, path_prefix='', epochs=3000, step_interval=100, is_Early_stopping=False):
         self.path_prefix = path_prefix
         self.label_size = label_size
         self.epochs = epochs
         self.step_interval = step_interval
-
         data_columns = data.columns
-        history = {'d_loss': [], 'g_loss': [] }
+
         # Adversarial ground truths
         valids = np.ones((self.batch_size, 1))
         non_valids = np.zeros((self.batch_size, 1))
 
+        # sample collector
+        pass_samples = []
+        not_pass_samples = []
+
+        Early_stopping_counter = 0
+        min_loss_g = 1000
+        min_loss_d = 1000
+        iterations_counter = 0
+        history = {'d_loss': [], 'g_loss': []}
+        fools_discriminator_samples = []
+        catch_discriminator_samples = []
         for epoch in range(self.epochs):
+            for X_batch, Y_batch in next_batch(data, 128):
+                iterations_counter += 1
+                # Setting batch of real data and noise
+                label = Y_batch
+                noise = tf.random.normal((self.batch_size, self.noise_size))
 
-            # Setting batch of real data and noise
-            batch_data = get_batch(data, self.batch_size)
-            label = batch_data[:, self.label_size]
-            noise = tf.random.normal((self.batch_size, self.noise_size))
+                # generate a batch of new data
+                gen_records = self.generator.predict([noise, label])
 
-            # generate a batch of new data
-            gen_records = self.generator.predict([noise, label])
+                # train the discriminator
+                loss_real_discriminator = self.discriminator.train_on_batch([X_batch, label],
+                                                                            valids)
+                loss_fake_discriminator = self.discriminator.train_on_batch([gen_records, label],
+                                                                            non_valids)
+                total_loss_discriminator = 0.5 * np.add(loss_real_discriminator,
+                                                        loss_fake_discriminator)
 
-            # train the discriminator
-            loss_real_discriminator = self.discriminator.train_on_batch([batch_data, label],
-                                                                        valids)
-            loss_fake_discriminator = self.discriminator.train_on_batch([gen_records, label],
-                                                                        non_valids)
-            total_loss_discriminator = 0.5 * np.add(loss_real_discriminator,
-                                                    loss_fake_discriminator)
+                # train the generator - to have the discriminator label samples from the
+                # training of the discriminator as valid
+                noise = tf.random.normal((self.batch_size, self.noise_size))
+                total_loss_generator = self.model.train_on_batch([noise, label], valids)
 
-            # train the generator - to have the discriminator label samples from the
-            # training of the discriminator as valid
-            noise = tf.random.normal((self.batch_size, self.noise_size))
-            total_loss_generator = self.model.train_on_batch([noise,label], valids)
+                # if we came to step interval we need to save the generated data
+                if epoch % self.step_interval == 0:
+                    model_checkpoint_path_d = os.path.join('weights/', self.path_prefix,
+                                                           'cgan_discriminator_model_weights_step_{}'
+                                                           .format(epoch))
+                    self.discriminator.save_weights(model_checkpoint_path_d)
+                    model_checkpoint_path_g = os.path.join('./weights/', self.path_prefix,
+                                                           'cgan_generator_model_weights_step_{}'
+                                                           .format(epoch))
+                    self.generator.save_weights(model_checkpoint_path_g)
 
-            if self.verbose:
-                print("%d [D loss: %f, acc.: %.2f%%] [G loss: %f]" %
-                      (epoch, total_loss_discriminator[0],
-                       100 * total_loss_discriminator[1], total_loss_generator))
-            history['d_loss'].append(total_loss_discriminator[0])
-            history['g_loss'].append(total_loss_generator)
-            # if we came to step interval we need to save the generated data
-            if epoch % self.step_interval == 0:
-                model_checkpoint_path_d = os.path.join('weights/', self.path_prefix,
-                                                       'cgan_discriminator_model_weights_step_{}'
-                                                       .format(epoch))
-                self.discriminator.save_weights(model_checkpoint_path_d)
-                model_checkpoint_path_g = os.path.join('./weights/', self.path_prefix,
-                                                       'cgan_generator_model_weights_step_{}'
-                                                       .format(epoch))
-                self.generator.save_weights(model_checkpoint_path_g)
+                    if iterations_counter > 3000:
+                        is_catch = True
+                        is_fool = True
+                        records = self.discriminator.predict_on_batch([gen_data, label_z])
+                        for i, record in enumerate(records):
+                            if record > 0.5 and is_fool:
+                                is_fool = False
+                                fool_sample = gen_data[i]
+                                fools_discriminator_samples.append([fool_sample, record])
+                            elif len(catch_discriminator_samples) < 100 and is_catch:
+                                is_catch = False
+                                catch_sample = gen_data[i]
+                                catch_discriminator_samples.append([catch_sample, record])
 
-                # generating some data
-                z = tf.random.normal((432, self.noise_size))
-                label_z = tf.random.uniform((432,), minval=min(self.classes), maxval=max(self.classes) + 1,
-                                            dtype=tf.dtypes.int32)
-                gen_data = self.generator([z, label_z])
+                history['g_loss'].append(total_loss_generator)
+                history['d_loss'].append(total_loss_discriminator[0])
+
                 if self.verbose:
-                    print('generated_data')
+                    print("epoch: %d iterations: %d [D loss: %f, acc.: %.2f%%] [G loss: %f]" %
+                          (epoch, iterations_counter, total_loss_discriminator[0],
+                           100 * total_loss_discriminator[1], total_loss_generator))
+
+                if epoch > 100 and is_Early_stopping:
+                    Early_stopping_counter += 1
+
+                    if min_loss_d > total_loss_discriminator[0] or min_loss_g > total_loss_generator:
+                        Early_stopping_counter = 0
+                        if min_loss_d > total_loss_discriminator[0]:
+                            min_loss_d = total_loss_discriminator[0]
+                        if min_loss_g > total_loss_generator:
+                            min_loss_g = total_loss_generator
+
+                    elif Early_stopping_counter > 100:
+                        print('Early Stopping')
+                        return history
         return history
 
-    def save(self, path):
-        if not os.path.isdir(path):
+    def get_discriminator(self):
+        return self.discriminator
+
+    def get_generator(self):
+        return self.generator
+
+    def generate_samples(self, num_samples):
+        x_fake = tf.random.normal((num_samples, self.noise_size))
+        y_fake = np.random.randint(self.classes[0], self.classes[1] + 1, (num_samples, 1))
+        pred = self.generator.predict([x_fake, y_fake])
+        res_df = pd.DataFrame(pred)
+        res_df['y_fake'] = y_fake
+        return res_df
+
+    def save(self, path, name):
+        if os.path.isdir(path) == False:
             raise Exception('Please provide correct path - Path must be a directory!')
-        self.generator.save_weights(os.path.join(path, 'generator_weights.h5')) # Load the generator
-        self.discriminator.save_weights(os.path.join(path, 'disriminator_weights.h5'))
+        model_path = os.path.join(path, name)
+        self.generator.save_weights(model_path)  # Load the generator
 
     def load(self, path):
-        if not os.path.isdir(path):
+        if os.path.isdir(path) == False:
             raise Exception('Please provide correct path - Path must be a directory!')
-        self.generator = Generator(self.batch_size, self.num_classes)
-        self.generator = self.generator.load_weights(os.path.join(path, 'generator_weights.h5'))
-        self.discriminator = Discriminator(self.batch_size, self.num_classes)
-        self.discriminator = self.discriminator.load_weights(os.path.join(path, 'discriminator_weights.h5'))
-        return self.generator, self.discriminator
+        self.generator = Generator(self.batch_size)
+        self.generator = self.generator.load_weights(path)
+        return self.generator
 
-    def generate_samples(self, data_path, num_samples=100, noise_size=32, load=True):
-        df = load_data_from_arff(data_path)
-        df1, les, normalizer, transformed_columns = preprocess_data(df, how='standard', class_col='income')
 
-        x_fake = tf.random.normal((num_samples, noise_size))
-        y_fake = np.random.uniform(0, 1, (num_samples, 1))
-        pred = self.generator.predict([x_fake, y_fake])
+def next_batch(data, batchSize):
+    # loop over our dataset X in mini-batches of size batchSize
+    convert_data = data.iloc[:, :].to_numpy()
+    for i in np.arange(0, data.shape[0], batchSize):
+        # yield a tuple of the current batched data and labels
+        random_batch = convert_data[np.random.choice(convert_data.shape[0], 128, replace=False)]
+        X = random_batch[:, :-1]
+        y = random_batch[:, -1]
+        yield (X, y)
 
-        res_df = pd.DataFrame(pred, columns=df1.columns)
-
-        res_df1 = inverse_transform(res_df, les, normalizer, transformed_columns, class_col='income')
-
-        return res_df1
 
 def get_batch(train, batch_size, seed=0):
     start_index = (batch_size * seed) % len(train)
